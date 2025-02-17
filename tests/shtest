@@ -14,6 +14,9 @@ JQ="$JQ -b"
 
 PATH=$JQBASEDIR:$PATH $JQBASEDIR/tests/jq-f-test.sh > /dev/null
 
+SHELL=/bin/sh
+export SHELL
+
 if [ -f "$JQBASEDIR/.libs/libinject_errors.so" ]; then
   # Do some simple error injection tests to check that we're handling
   # I/O errors correctly.
@@ -34,77 +37,17 @@ $VALGRIND $Q $JQ -Rse '. == "a\u0000b\nc\u0000d\ne"' $d/input
 $VALGRIND $Q $JQ -Rne '[inputs] == ["a\u0000b", "c\u0000d", "e"]' $d/input
 
 ## Test constant folding
-
-## XXX If we add a builtin to list the program's disassembly then we can
-## move all of these into tests/all.test
-
-# String constant folding (addition only)
 nref=$($VALGRIND $Q $JQ -n --debug-dump-disasm '"foo"' | wc -l)
-n=$($VALGRIND $Q $JQ -n --debug-dump-disasm '"foo" + "bar"' | wc -l)
-if [ $n -ne $nref ]; then
-  echo "Constant expression folding for strings didn't work"
-  exit 1
-fi
-
-# Numeric constant folding (binary operators)
-n=$($VALGRIND $Q $JQ -n --debug-dump-disasm '1+1' | wc -l)
-if [ $n -ne $nref ]; then
-  echo "Constant expression folding for numbers didn't work"
-  exit 1
-fi
-n=$($VALGRIND $Q $JQ -n --debug-dump-disasm '1-1' | wc -l)
-if [ $n -ne $nref ]; then
-  echo "Constant expression folding for numbers didn't work"
-  exit 1
-fi
-n=$($VALGRIND $Q $JQ -n --debug-dump-disasm '2*3' | wc -l)
-if [ $n -ne $nref ]; then
-  echo "Constant expression folding for numbers didn't work"
-  exit 1
-fi
-n=$($VALGRIND $Q $JQ -n --debug-dump-disasm '9/3' | wc -l)
-if [ $n -ne $nref ]; then
-  echo "Constant expression folding for numbers didn't work"
-  exit 1
-fi
-n=$($VALGRIND $Q $JQ -n --debug-dump-disasm '9%3' | wc -l)
-if [ $n -ne $nref ]; then
-  echo "Constant expression folding for numbers didn't work"
-  exit 1
-fi
-n=$($VALGRIND $Q $JQ -n --debug-dump-disasm '9==3' | wc -l)
-if [ $n -ne $nref ]; then
-  echo "Constant expression folding for numbers didn't work"
-  exit 1
-fi
-n=$($VALGRIND $Q $JQ -n --debug-dump-disasm '9!=3' | wc -l)
-if [ $n -ne $nref ]; then
-  echo "Constant expression folding for numbers didn't work"
-  exit 1
-fi
-n=$($VALGRIND $Q $JQ -n --debug-dump-disasm '9<3' | wc -l)
-if [ $n -ne $nref ]; then
-  echo "Constant expression folding for numbers didn't work"
-  exit 1
-fi
-n=$($VALGRIND $Q $JQ -n --debug-dump-disasm '9>3' | wc -l)
-if [ $n -ne $nref ]; then
-  echo "Constant expression folding for numbers didn't work"
-  exit 1
-fi
-n=$($VALGRIND $Q $JQ -n --debug-dump-disasm '9<=3' | wc -l)
-if [ $n -ne $nref ]; then
-  echo "Constant expression folding for numbers didn't work"
-  exit 1
-fi
-n=$($VALGRIND $Q $JQ -n --debug-dump-disasm '9>=3' | wc -l)
-if [ $n -ne $nref ]; then
-  echo "Constant expression folding for numbers didn't work"
-  exit 1
-fi
+for exp in '1+1' '1-1' '2*3' '9/3' '9%3' '9==3' '9!=3' \
+  '9<3' '9>3' '9<=3' '9>=3' '1+2*3-4/5%6' '"foo" + "bar"'; do
+  n=$($VALGRIND $Q $JQ -n --debug-dump-disasm "$exp" | wc -l)
+  if [ $n -ne $nref ]; then
+    echo "Constant expression folding didn't work: $exp"
+    exit 1
+  fi
+done
 
 ## Test JSON sequence support
-
 cat > $d/expected <<EOF
 jq: ignoring parse error: Truncated value at line 2, column 5
 jq: ignoring parse error: Truncated value at line 2, column 25
@@ -151,6 +94,20 @@ if printf '1\n' | $JQ -cen --seq '[inputs] == []' >/dev/null 2> $d/out; then
 fi
 cmp $d/out $d/expected
 
+# Test control characters for #2909
+cat > $d/expected <<EOF
+jq: parse error: Invalid string: control characters from U+0000 through U+001F must be escaped at line 1, column 3
+EOF
+for i in 1 2 30 31; do
+  if printf "\"$(printf '\\%03o' $i)\"" | $JQ '.' > $d/out 2>&1; then
+    printf 'Error expected but jq exited successfully\n' 1>&2
+    exit 2
+  fi
+  cmp $d/out $d/expected
+done
+printf '" ~\\u007f"\n' > $d/expected
+printf "\"$(printf '\\%03o' 32 126 127)\"" | $JQ '.' > $d/out 2>&1
+cmp $d/out $d/expected
 
 ## Test --exit-status
 data='{"i": 1}\n{"i": 2}\n{"i": 3}\n'
@@ -197,10 +154,10 @@ cmp $d/out $d/expected
 
 # Regression test for --raw-output0
 printf "a\0b\0" > $d/expected
-printf '["a", "b"]' | $VALGRIND $Q $JQ --raw-output0 .[] > $d/out
+printf '["a", "b"]' | $VALGRIND $Q $JQ --raw-output0 '.[]' > $d/out
 cmp $d/out $d/expected
 printf "a\0" > $d/expected
-if printf '["a", "c\\u0000d", "b"]' | $VALGRIND $Q $JQ --raw-output0 .[] > $d/out; then
+if printf '["a", "c\\u0000d", "b"]' | $VALGRIND $Q $JQ --raw-output0 '.[]' > $d/out; then
   echo "Should exit error on string containing NUL with --raw-output0" 1>&2
   exit 1
 elif [ $? -ne 5 ]; then
@@ -209,6 +166,28 @@ elif [ $? -ne 5 ]; then
 else
   cmp $d/out $d/expected
 fi
+
+# Regression tests for #3194
+echo 42 > $d/expected
+$JQ -nn 42 > $d/out 2>&1
+cmp $d/out $d/expected
+
+$JQ -nL. 42 > $d/out 2>&1
+cmp $d/out $d/expected
+$JQ -nL . 42 > $d/out 2>&1
+cmp $d/out $d/expected
+
+$JQ -h > $d/expected 2>&1
+$JQ -hV > $d/out 2>&1
+cmp $d/out $d/expected
+$JQ -h -V > $d/out 2>&1
+cmp $d/out $d/expected
+
+$JQ -V > $d/expected 2>&1
+$JQ -Vh > $d/out 2>&1
+cmp $d/out $d/expected
+$JQ -V -h > $d/out 2>&1
+cmp $d/out $d/expected
 
 ## Test streaming parser
 
@@ -244,7 +223,7 @@ if which seq > /dev/null 2>&1; then
         if [ -n "$VALGRIND" ]; then
             grep '^==[0-9][0-9]*== ERROR SUMMARY: 0 errors' $d/err > /dev/null
         else
-            tail -1 $d/err | egrep -i 'assert|abort|core' && false
+            tail -n1 -- "$d/err" | grep -Ei 'assert|abort|core' && false
         fi
 
         dd "if=tests/torture/input0.json" bs=$i count=1 2>/dev/null |
@@ -252,7 +231,7 @@ if which seq > /dev/null 2>&1; then
         if [ -n "$VALGRIND" ]; then
             grep '^==[0-9][0-9]*== ERROR SUMMARY: 0 errors' $d/err > /dev/null
         else
-            tail -1 $d/err | egrep -i 'assert|abort|core' && false
+            tail -n1 -- "$d/err" | grep -Ei 'assert|abort|core' && false
         fi
 
         diff $d/out0 $d/out1
@@ -359,6 +338,17 @@ if [ "$(HOME="$mods/home1" $VALGRIND $Q $JQ -nr fg)" != foobar ]; then
     exit 1
 fi
 
+if $msys || $mingw; then
+    HOME_BAK=$HOME
+    unset HOME
+    if [ "$(USERPROFILE="$mods/home1" $VALGRIND $Q $JQ -nr foo)" != baz ]; then
+        echo "Bug #3104 regressed (sourcing %USERPROFILE%/.jq on Windows)" 1>&2
+        exit 1
+    fi
+    export HOME=$HOME_BAK
+    unset HOME_BAK
+fi
+
 if [ $(HOME="$mods/home1" $VALGRIND $Q $JQ --debug-dump-disasm -n fg | grep '^[a-z]' | wc -l) -ne 3 ]; then
     echo "Binding too many defs into program" 1>&2
     exit 1
@@ -436,41 +426,96 @@ printf '\033[4;31mnull\033[0m\n' > $d/expect
 cmp $d/color $d/expect
 
 ## Default colors, complex input
-$JQ -Ccn '[{"a":true,"b":false},123,null]' > $d/color
+$JQ -Ccn '[{"a":true,"b":false},"abc",123,null]' > $d/color
 {
-  printf '\033[1;37m[\033[1;37m{'
-  printf '\033[0m\033[1;34m"a"\033['
-  printf '0m\033[1;37m:\033[0m\033['
-  printf '0;37mtrue\033[0m\033[1'
-  printf ';37m,\033[0m\033[1;34m'
-  printf '"b"\033[0m\033[1;37m:\033'
-  printf '[0m\033[0;37mfalse\033'
-  printf '[0m\033[1;37m\033[1;37'
-  printf 'm}\033[0m\033[1;37m,\033['
-  printf '0;37m123\033[0m\033[1;'
-  printf '37m,\033[0;90mnull\033'
-  printf '[0m\033[1;37m\033[1;37'
-  printf 'm]\033[0m\n'
+  printf '\033[1;39m[\033[0m'
+  printf '\033[1;39m{\033[0m'
+  printf '\033[1;34m"a"\033[0m'
+  printf '\033[1;39m:\033[0m'
+  printf '\033[0;39mtrue\033[0m'
+  printf '\033[1;39m,\033[0m'
+  printf '\033[1;34m"b"\033[0m'
+  printf '\033[1;39m:\033[0m'
+  printf '\033[0;39mfalse\033[0m'
+  printf '\033[1;39m}\033[0m'
+  printf '\033[1;39m,\033[0m'
+  printf '\033[0;32m"abc"\033[0m'
+  printf '\033[1;39m,\033[0m'
+  printf '\033[0;39m123\033[0m'
+  printf '\033[1;39m,\033[0m'
+  printf '\033[0;90mnull\033[0m'
+  printf '\033[1;39m]\033[0m\n'
 } > $d/expect
 cmp $d/color $d/expect
 
 ## Set non-default colors, complex input
 JQ_COLORS='0;30:0;31:0;32:0;33:0;34:1;35:1;36:1;37' \
-  $JQ -Ccn '[{"a":true,"b":false},123,null]' > $d/color
+  $JQ -Ccn '[{"a":true,"b":false},"abc",123,null]' > $d/color
 {
-  printf '\033[1;35m[\033[1;36m{'
-  printf '\033[0m\033[1;37m"a"\033['
-  printf '0m\033[1;36m:\033[0m\033['
-  printf '0;32mtrue\033[0m\033[1'
-  printf ';36m,\033[0m\033[1;37m'
-  printf '"b"\033[0m\033[1;36m:\033'
-  printf '[0m\033[0;31mfalse\033'
-  printf '[0m\033[1;36m\033[1;36'
-  printf 'm}\033[0m\033[1;35m,\033['
-  printf '0;33m123\033[0m\033[1;'
-  printf '35m,\033[0;30mnull\033'
-  printf '[0m\033[1;35m\033[1;35'
-  printf 'm]\033[0m\n'
+  printf '\033[1;35m[\033[0m'
+  printf '\033[1;36m{\033[0m'
+  printf '\033[1;37m"a"\033[0m'
+  printf '\033[1;36m:\033[0m'
+  printf '\033[0;32mtrue\033[0m'
+  printf '\033[1;36m,\033[0m'
+  printf '\033[1;37m"b"\033[0m'
+  printf '\033[1;36m:\033[0m'
+  printf '\033[0;31mfalse\033[0m'
+  printf '\033[1;36m}\033[0m'
+  printf '\033[1;35m,\033[0m'
+  printf '\033[0;34m"abc"\033[0m'
+  printf '\033[1;35m,\033[0m'
+  printf '\033[0;33m123\033[0m'
+  printf '\033[1;35m,\033[0m'
+  printf '\033[0;30mnull\033[0m'
+  printf '\033[1;35m]\033[0m\n'
+} > $d/expect
+cmp $d/color $d/expect
+
+## Default colors, complex input, indented
+$JQ -Cn '[{"a":true,"b":false},"abc",123,null]' > $d/color
+{
+  printf '\033[1;39m[\033[0m\n'
+  printf '  \033[1;39m{\033[0m\n'
+  printf '    \033[1;34m"a"\033[0m'
+  printf '\033[1;39m:\033[0m '
+  printf '\033[0;39mtrue\033[0m'
+  printf '\033[1;39m,\033[0m\n'
+  printf '    \033[1;34m"b"\033[0m'
+  printf '\033[1;39m:\033[0m '
+  printf '\033[0;39mfalse\033[0m\n'
+  printf '  \033[1;39m}\033[0m'
+  printf '\033[1;39m,\033[0m\n'
+  printf '  \033[0;32m"abc"\033[0m'
+  printf '\033[1;39m,\033[0m\n'
+  printf '  \033[0;39m123\033[0m'
+  printf '\033[1;39m,\033[0m\n'
+  printf '  \033[0;90mnull\033[0m\n'
+  printf '\033[1;39m]\033[0m\n'
+} > $d/expect
+cmp $d/color $d/expect
+
+## Set non-default colors, complex input, indented
+JQ_COLORS='0;30:0;31:0;32:0;33:0;34:1;35:1;36:1;37' \
+  $JQ -Cn '[{"a":true,"b":false},"abc",123,null]' > $d/color
+{
+  printf '\033[1;35m[\033[0m\n'
+  printf '  \033[1;36m{\033[0m\n'
+  printf '    \033[1;37m"a"\033[0m'
+  printf '\033[1;36m:\033[0m '
+  printf '\033[0;32mtrue\033[0m'
+  printf '\033[1;36m,\033[0m\n'
+  printf '    \033[1;37m"b"\033[0m'
+  printf '\033[1;36m:\033[0m '
+  printf '\033[0;31mfalse\033[0m\n'
+  printf '  \033[1;36m}\033[0m'
+  printf '\033[1;35m,\033[0m\n'
+  printf '  \033[0;34m"abc"\033[0m'
+  printf '\033[1;35m,\033[0m\n'
+  printf '  \033[0;33m123\033[0m'
+  printf '\033[1;35m,\033[0m\n'
+  printf '  \033[0;30mnull\033[0m\n'
+  printf '\033[1;35m]\033[0m\n'
 } > $d/expect
 cmp $d/color $d/expect
 
@@ -480,25 +525,25 @@ cmp $d/color $d/expect
 # on stderr.
 set -vx
 echo 'Failed to set $JQ_COLORS' > $d/expect_warning
-$JQ -Ccn '[{"a":true,"b":false},123,null]' > $d/expect
+$JQ -Ccn '[{"a":true,"b":false},"abc",123,null]' > $d/expect
 JQ_COLORS='garbage;30:*;31:,;3^:0;$%:0;34:1;35:1;36' \
-  $JQ -Ccn '[{"a":true,"b":false},123,null]' > $d/color 2>$d/warning
+  $JQ -Ccn '[{"a":true,"b":false},"abc",123,null]' > $d/color 2>$d/warning
 cmp $d/color $d/expect
 cmp $d/warning $d/expect_warning
 JQ_COLORS='1234567890123456789;30:0;31:0;32:0;33:0;34:1;35:1;36' \
-  $JQ -Ccn '[{"a":true,"b":false},123,null]' > $d/color 2>$d/warning
+  $JQ -Ccn '[{"a":true,"b":false},"abc",123,null]' > $d/color 2>$d/warning
 cmp $d/color $d/expect
 cmp $d/warning $d/expect_warning
 JQ_COLORS='1;31234567890123456789:0;31:0;32:0;33:0;34:1;35:1;36' \
-  $JQ -Ccn '[{"a":true,"b":false},123,null]' > $d/color 2>$d/warning
+  $JQ -Ccn '[{"a":true,"b":false},"abc",123,null]' > $d/color 2>$d/warning
 cmp $d/color $d/expect
 cmp $d/warning $d/expect_warning
 JQ_COLORS='1234567890123456;1234567890123456:1234567890123456;1234567890123456:1234567890123456;1234567890123456:1234567890123456;1234567890123456:1234567890123456;1234567890123456:1234567890123456;1234567890123456:1234567890123456;1234567890123456' \
-  $JQ -Ccn '[{"a":true,"b":false},123,null]' > $d/color 2>$d/warning
+  $JQ -Ccn '[{"a":true,"b":false},"abc",123,null]' > $d/color 2>$d/warning
 cmp $d/color $d/expect
 cmp $d/warning $d/expect_warning
 JQ_COLORS="0123456789123:0123456789123:0123456789123:0123456789123:0123456789123:0123456789123:0123456789123:0123456789123:" \
-  $JQ -Ccn '[{"a":true,"b":false},123,null]' > $d/color 2>$d/warning
+  $JQ -Ccn '[{"a":true,"b":false},"abc",123,null]' > $d/color 2>$d/warning
 cmp $d/color $d/expect
 cmp $d/warning $d/expect_warning
 
@@ -517,23 +562,23 @@ if $test_no_color && command -v script >/dev/null 2>&1; then
 
   faketty $JQ_NO_B -n . > $d/color
   printf '\033[0;90mnull\033[0m\r\n' > $d/expect
-  od -c $d/expect
-  od -c $d/color
+  od -tc $d/expect
+  od -tc $d/color
   cmp $d/color $d/expect
-  NO_COLOR= faketty $JQ_NO_B -n . > $d/color
+  faketty env NO_COLOR= $JQ_NO_B -n . > $d/color
   printf '\033[0;90mnull\033[0m\r\n' > $d/expect
-  od -c $d/expect
-  od -c $d/color
+  od -tc $d/expect
+  od -tc $d/color
   cmp $d/color $d/expect
-  NO_COLOR=1 faketty $JQ_NO_B -n . > $d/color
+  faketty env NO_COLOR=1 $JQ_NO_B -n . > $d/color
   printf 'null\r\n' > $d/expect
-  od -c $d/expect
-  od -c $d/color
+  od -tc $d/expect
+  od -tc $d/color
   cmp $d/color $d/expect
-  NO_COLOR=1 faketty $JQ_NO_B -Cn . > $d/color
+  faketty env NO_COLOR=1 $JQ_NO_B -Cn . > $d/color
   printf '\033[0;90mnull\033[0m\r\n' > $d/expect
-  od -c $d/expect
-  od -c $d/color
+  od -tc $d/expect
+  od -tc $d/color
   cmp $d/color $d/expect
 fi
 
@@ -566,16 +611,130 @@ if ! $VALGRIND $Q $JQ -n -f "$JQTESTDIR/yes-main-program.jq" > $d/out 2>&1; then
   exit 1
 fi
 
-if ( ! $msys && ! $mingw ) && locale -a > /dev/null; then
-  locale=$(locale -a | egrep -v '^(C|LANG|POSIX|en)' | egrep -i 'utf8|utf-8' | head -1)
-  if [ -z "$locale" ]; then
+if ! $msys && ! $mingw && locales=$(locale -a); then
+  { l=$(grep -Ev '^(C|LANG|POSIX|en)' | grep -Ei '\.utf-?8$' | head -n1) ;} \
+<<EOF
+$locales
+EOF
+  if [ -z "$l" ]; then
     echo "WARNING: Not testing localization"
   else
-    date=$(LC_ALL="$locale" date +"%a %d %b %Y at %H:%M:%S")
-    if ! LC_ALL="$locale" ./jq -nRe --arg date "$date" '$date|strptime("%a %d %b %Y at %H:%M:%S")? // false'; then
+    date=$(LC_ALL=$l date +'%a %d %b %Y at %H:%M:%S')
+    if ! LC_ALL=$l $JQ -nR --arg date "$date" '$date|strptime("%a %d %b %Y at %H:%M:%S")'; then
       echo "jq does not honor LC_ALL environment variable"
-      exit 1;
+      exit 1
     fi
+  fi
+fi
+
+# Comments!
+if ! x=$($JQ -n '123 # comment') || [ "$x" != 123 ]; then
+  echo 'comment did not work'
+  exit 1
+fi
+
+cr=$(printf \\r)
+if ! x=$($JQ -n "1 # foo$cr + 2") || [ "$x" != 1 ]; then
+  echo 'regression: carriage return terminates comment'
+  exit 1
+fi
+
+if ! x=$($JQ -cn '[
+  1,
+  # foo \
+  2,
+  # bar \\
+  3,
+  4, # baz \\\
+  5, \
+  6,
+  7
+  # comment \
+    comment \
+    comment
+]') || [ "$x" != '[1,3,4,7]' ]; then
+  echo 'multiline comment was not handled correctly'
+  exit 1
+fi
+
+# CVE-2023-50268: No stack overflow comparing a nan with a large payload
+if $JQ -ne 'have_decnum'; then
+  $VALGRIND $Q $JQ '1 != .' <<\EOF >/dev/null
+  Nan4000
+EOF
+fi
+
+# Allow passing the inline jq script before -- #2919
+if ! r=$($JQ --args -rn -- '$ARGS.positional[0]' bar) || [ "$r" != bar ]; then
+    echo "passing the inline script after -- didn't work"
+    exit 1
+fi
+if ! r=$($JQ --args -rn 1 -- '$ARGS.positional[0]' bar) || [ "$r" != 1 ]; then
+    echo "passing the inline script before -- didn't work"
+    exit 1
+fi
+
+# CVE-2023-50246: No heap overflow for '-10E-1000000001'
+$VALGRIND $Q $JQ . <<\NUM
+-10E-1000000001
+NUM
+
+# test for --indent and --compact-output -- #1465
+printf '[1,2]\n' > $d/expected
+$JQ --compact-output -n "[1,2]" > $d/out
+cmp $d/out $d/expected
+
+printf '[\n1,\n2\n]\n' > $d/expected
+$JQ --indent 0 -n "[1,2]" > $d/out
+cmp $d/out $d/expected
+
+printf '[\n 1,\n 2\n]\n' > $d/expected
+$JQ --indent 1 -n "[1,2]" > $d/out
+cmp $d/out $d/expected
+
+printf '[\n     1,\n     2\n]\n' > $d/expected
+$JQ --indent 5 -n "[1,2]" > $d/out
+cmp $d/out $d/expected
+
+printf '[\n{\n"a": 1\n}\n]\n' > $d/expected
+$JQ --indent 0 -n "[{a:1}]" > $d/out
+cmp $d/out $d/expected
+
+printf '[\n {\n  "a": 1\n }\n]\n' > $d/expected
+$JQ --indent 1 -n "[{a:1}]" > $d/out
+cmp $d/out $d/expected
+
+printf '[\n      {\n            "a": 1\n      }\n]\n' > $d/expected
+$JQ --indent 6 -n "[{a:1}]" > $d/out
+cmp $d/out $d/expected
+
+if ! $msys && ! $mingw; then
+  # Test handling of timezones -- #2429, #2475
+  if ! r=$(TZ=Asia/Tokyo $JQ -rn '1731627341 | strflocaltime("%F %T %z %Z")') \
+    || [ "$r" != "2024-11-15 08:35:41 +0900 JST" ]; then
+    echo "Incorrectly formatted local time"
+    exit 1
+  fi
+ 
+  if ! r=$(TZ=Europe/Paris $JQ -rn '1731627341 | strflocaltime("%F %T %z %Z")') \
+    || [ "$r" != "2024-11-15 00:35:41 +0100 CET" ]; then
+    echo "Incorrectly formatted local time"
+    exit 1
+  fi
+ 
+  if ! r=$(TZ=Europe/Paris $JQ -rn '1731627341 | strftime("%F %T %z %Z")') \
+    || ( [ "$r" != "2024-11-14 23:35:41 +0000 UTC" ] \
+      && [ "$r" != "2024-11-14 23:35:41 +0000 GMT" ] ); then
+    echo "Incorrectly formatted universal time"
+    exit 1
+  fi
+ 
+  if ! r=$(TZ=Etc/GMT+7 $JQ -nc '1731627341 | .,. | [strftime("%FT%T"),strflocaltime("%FT%T%z")]'
+) \
+    || [ "$r" != '["2024-11-14T23:35:41","2024-11-14T16:35:41-0700"]
+["2024-11-14T23:35:41","2024-11-14T16:35:41-0700"]' ]; then
+    echo "strftime or strftimelocal are not pure functions"
+    exit 1
   fi
 fi
 

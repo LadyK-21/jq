@@ -86,6 +86,9 @@ class RoffWalker(object):
                     self.__write_cmd('.P')
                 self._write_element(root, ensure_newline=(parent_tag != 'li'))
 
+            elif root.tag == 'a':
+                self._write_element(root, ensure_newline=(parent_tag != 'li'))
+
             elif root.tag == 'ul':
                 if self._ul_is_special(root):
                     li = root[0]
@@ -206,7 +209,7 @@ def dedent_body(body):
 
 def convert_manual_to_markdown():
     f = StringIO()
-    manual = load_yml_file("content/manual/manual.yml")
+    manual = load_yml_file("content/manual/dev/manual.yml")
     f.write(manual.get('manpage_intro', '\n'))
     f.write(dedent_body(manual.get('body', '\n')))
     for section in manual.get('sections', []):

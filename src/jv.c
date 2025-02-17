@@ -206,16 +206,13 @@ enum {
   JVP_NUMBER_DECIMAL = 1
 };
 
-#define JV_NUMBER_SIZE_INIT      (0)
-#define JV_NUMBER_SIZE_CONVERTED (1)
-
 #define JVP_FLAGS_NUMBER_NATIVE       JVP_MAKE_FLAGS(JV_KIND_NUMBER, JVP_MAKE_PFLAGS(JVP_NUMBER_NATIVE, 0))
 #define JVP_FLAGS_NUMBER_LITERAL      JVP_MAKE_FLAGS(JV_KIND_NUMBER, JVP_MAKE_PFLAGS(JVP_NUMBER_DECIMAL, 1))
 
 // the decimal precision of binary double
-#define DEC_NUBMER_DOUBLE_PRECISION   (16)
+#define DEC_NUMBER_DOUBLE_PRECISION   (17)
 #define DEC_NUMBER_STRING_GUARD       (14)
-#define DEC_NUBMER_DOUBLE_EXTRA_UNITS ((DEC_NUBMER_DOUBLE_PRECISION - DECNUMDIGITS + DECDPUN - 1)/DECDPUN)
+#define DEC_NUMBER_DOUBLE_EXTRA_UNITS ((DEC_NUMBER_DOUBLE_PRECISION - DECNUMDIGITS + DECDPUN - 1)/DECDPUN)
 
 #include "jv_thread.h"
 #ifdef WIN32
@@ -489,27 +486,19 @@ pthread_getspecific(pthread_key_t key)
 #endif
 
 static pthread_key_t dec_ctx_key;
-static pthread_key_t dec_ctx_dbl_key;
 static pthread_once_t dec_ctx_once = PTHREAD_ONCE_INIT;
 
 #define DEC_CONTEXT() tsd_dec_ctx_get(&dec_ctx_key)
-#define DEC_CONTEXT_TO_DOUBLE() tsd_dec_ctx_get(&dec_ctx_dbl_key)
 
 // atexit finalizer to clean up the tsd dec contexts if main() exits
 // without having called pthread_exit()
 void jv_tsd_dec_ctx_fini() {
   jv_mem_free(pthread_getspecific(dec_ctx_key));
-  jv_mem_free(pthread_getspecific(dec_ctx_dbl_key));
   pthread_setspecific(dec_ctx_key, NULL);
-  pthread_setspecific(dec_ctx_dbl_key, NULL);
 }
 
 void jv_tsd_dec_ctx_init() {
   if (pthread_key_create(&dec_ctx_key, jv_mem_free) != 0) {
-    fprintf(stderr, "error: cannot create thread specific key");
-    abort();
-  }
-  if (pthread_key_create(&dec_ctx_dbl_key, jv_mem_free) != 0) {
     fprintf(stderr, "error: cannot create thread specific key");
     abort();
   }
@@ -533,12 +522,6 @@ static decContext* tsd_dec_ctx_get(pthread_key_t *key) {
           INT32_MAX - (DECDPUN - 1) - (ctx->emax - ctx->emin - 1));
       ctx->traps = 0; /*no errors*/
     }
-    else if (key == &dec_ctx_dbl_key)
-    {
-      decContextDefault(ctx, DEC_INIT_DECIMAL64);
-      // just to make sure we got this right
-      assert(ctx->digits <= DEC_NUBMER_DOUBLE_PRECISION);
-    }
     if (pthread_setspecific(*key, ctx) != 0) {
       fprintf(stderr, "error: cannot store thread specific data");
       abort();
@@ -556,7 +539,7 @@ typedef struct {
 
 typedef struct {
   decNumber number;
-  decNumberUnit units[DEC_NUBMER_DOUBLE_EXTRA_UNITS];
+  decNumberUnit units[DEC_NUMBER_DOUBLE_EXTRA_UNITS];
 } decNumberDoublePrecision;
 
 
@@ -576,7 +559,6 @@ static decNumber* jvp_dec_number_ptr(jv j) {
 }
 
 static jvp_literal_number* jvp_literal_number_alloc(unsigned literal_length) {
-
   /* The number of units needed is ceil(DECNUMDIGITS/DECDPUN)         */
   int units = ((literal_length+DECDPUN-1)/DECDPUN);
 
@@ -585,39 +567,47 @@ static jvp_literal_number* jvp_literal_number_alloc(unsigned literal_length) {
     + sizeof(decNumberUnit) * units
   );
 
+  n->refcnt = JV_REFCNT_INIT;
+  n->num_double = NAN;
+  n->literal_data = NULL;
   return n;
 }
 
 static jv jvp_literal_number_new(const char * literal) {
+  jvp_literal_number* n = jvp_literal_number_alloc(strlen(literal));
 
-  jvp_literal_number * n = jvp_literal_number_alloc(strlen(literal));
-
-  n->refcnt = JV_REFCNT_INIT;
-  n->literal_data = NULL;
   decContext *ctx = DEC_CONTEXT();
   decContextClearStatus(ctx, DEC_Conversion_syntax);
   decNumberFromString(&n->num_decimal, literal, ctx);
-  n->num_double = NAN;
 
   if (ctx->status & DEC_Conversion_syntax) {
     jv_mem_free(n);
     return JV_INVALID;
   }
+  if (decNumberIsNaN(&n->num_decimal)) {
+    jv_mem_free(n);
+    return jv_number(NAN);
+  }
 
-  jv r = {JVP_FLAGS_NUMBER_LITERAL, 0, 0, JV_NUMBER_SIZE_INIT, {&n->refcnt}};
+  jv r = {JVP_FLAGS_NUMBER_LITERAL, 0, 0, 0, {&n->refcnt}};
   return r;
 }
 
 static double jvp_literal_number_to_double(jv j) {
   assert(JVP_HAS_FLAGS(j, JVP_FLAGS_NUMBER_LITERAL));
+  decContext dblCtx;
+
+  // init as decimal64 but change digits to allow conversion to binary64 (double)
+  decContextDefault(&dblCtx, DEC_INIT_DECIMAL64);
+  dblCtx.digits = DEC_NUMBER_DOUBLE_PRECISION;
 
   decNumber *p_dec_number = jvp_dec_number_ptr(j);
   decNumberDoublePrecision dec_double;
-  char literal[DEC_NUBMER_DOUBLE_PRECISION + DEC_NUMBER_STRING_GUARD + 1];
+  char literal[DEC_NUMBER_DOUBLE_PRECISION + DEC_NUMBER_STRING_GUARD + 1];
 
   // reduce the number to the shortest possible form
   // that fits into the 64 bit floating point representation
-  decNumberReduce(&dec_double.number, p_dec_number, DEC_CONTEXT_TO_DOUBLE());
+  decNumberReduce(&dec_double.number, p_dec_number, &dblCtx);
 
   decNumberToString(&dec_double.number, literal);
 
@@ -644,7 +634,7 @@ static const char* jvp_literal_number_literal(jv n) {
   }
 
   if (plit->literal_data == NULL) {
-    int len = jvp_dec_number_ptr(n)->digits + 14;
+    int len = jvp_dec_number_ptr(n)->digits + 15 /* 14 + NUL */;
     plit->literal_data = jv_mem_alloc(len);
 
     // Preserve the actual precision as we have parsed it
@@ -707,9 +697,8 @@ double jv_number_value(jv j) {
   if (JVP_HAS_FLAGS(j, JVP_FLAGS_NUMBER_LITERAL)) {
     jvp_literal_number* n = jvp_literal_number_ptr(j);
 
-    if (j.size != JV_NUMBER_SIZE_CONVERTED) {
+    if (isnan(n->num_double)) {
       n->num_double = jvp_literal_number_to_double(j);
-      j.size = JV_NUMBER_SIZE_CONVERTED;
     }
 
     return n->num_double;
@@ -740,7 +729,22 @@ int jvp_number_is_nan(jv n) {
     return decNumberIsNaN(pdec);
   }
 #endif
-  return n.u.number != n.u.number;
+  return isnan(n.u.number);
+}
+
+jv jv_number_negate(jv n) {
+  assert(JVP_HAS_KIND(n, JV_KIND_NUMBER));
+
+#ifdef USE_DECNUM
+  if (JVP_HAS_FLAGS(n, JVP_FLAGS_NUMBER_LITERAL)) {
+    jvp_literal_number* m = jvp_literal_number_alloc(jvp_dec_number_ptr(n)->digits);
+
+    decNumberMinus(&m->num_decimal, jvp_dec_number_ptr(n), DEC_CONTEXT());
+    jv r = {JVP_FLAGS_NUMBER_LITERAL, 0, 0, 0, {&m->refcnt}};
+    return r;
+  }
+#endif
+  return jv_number(-jv_number_value(n));
 }
 
 int jvp_number_cmp(jv a, jv b) {
@@ -749,15 +753,19 @@ int jvp_number_cmp(jv a, jv b) {
 
 #ifdef USE_DECNUM
   if (JVP_HAS_FLAGS(a, JVP_FLAGS_NUMBER_LITERAL) && JVP_HAS_FLAGS(b, JVP_FLAGS_NUMBER_LITERAL)) {
-    decNumber res;
-    decNumberCompare(&res,
+    struct {
+      decNumber number;
+      decNumberUnit units[1];
+    } res;
+
+    decNumberCompare(&res.number,
                      jvp_dec_number_ptr(a),
                      jvp_dec_number_ptr(b),
                      DEC_CONTEXT()
                      );
-    if (decNumberIsZero(&res)) {
+    if (decNumberIsZero(&res.number)) {
       return 0;
-    } else if (decNumberIsNegative(&res)) {
+    } else if (decNumberIsNegative(&res.number)) {
       return -1;
     } else {
       return 1;
@@ -1030,14 +1038,13 @@ jv jv_array_slice(jv a, int start, int end) {
 jv jv_array_indexes(jv a, jv b) {
   jv res = jv_array();
   int idx = -1;
-  jv_array_foreach(a, ai, aelem) {
-    jv_free(aelem);
+  int alen = jv_array_length(jv_copy(a));
+  for (int ai = 0; ai < alen; ++ai) {
     jv_array_foreach(b, bi, belem) {
-      if (!jv_equal(jv_array_get(jv_copy(a), ai + bi), jv_copy(belem)))
+      if (!jv_equal(jv_array_get(jv_copy(a), ai + bi), belem))
         idx = -1;
       else if (bi == 0 && idx == -1)
         idx = ai;
-      jv_free(belem);
     }
     if (idx > -1)
       res = jv_array_append(res, jv_number(idx));
@@ -1080,14 +1087,13 @@ static jvp_string* jvp_string_alloc(uint32_t size) {
 static jv jvp_string_copy_replace_bad(const char* data, uint32_t length) {
   const char* end = data + length;
   const char* i = data;
-  const char* cstart;
 
   uint32_t maxlength = length * 3 + 1; // worst case: all bad bytes, each becomes a 3-byte U+FFFD
   jvp_string* s = jvp_string_alloc(maxlength);
   char* out = s->data;
   int c = 0;
 
-  while ((i = jvp_utf8_next((cstart = i), end, &c))) {
+  while ((i = jvp_utf8_next(i, end, &c))) {
     if (c == -1) {
       c = 0xFFFD; // U+FFFD REPLACEMENT CHARACTER
     }
@@ -1280,15 +1286,21 @@ jv jv_string_indexes(jv j, jv k) {
   assert(JVP_HAS_KIND(k, JV_KIND_STRING));
   const char *jstr = jv_string_value(j);
   const char *idxstr = jv_string_value(k);
-  const char *p;
+  const char *p, *lp;
   int jlen = jv_string_length_bytes(jv_copy(j));
   int idxlen = jv_string_length_bytes(jv_copy(k));
   jv a = jv_array();
 
   if (idxlen != 0) {
-    p = jstr;
+    int n = 0;
+    p = lp = jstr;
     while ((p = _jq_memmem(p, (jstr + jlen) - p, idxstr, idxlen)) != NULL) {
-      a = jv_array_append(a, jv_number(p - jstr));
+      while (lp < p) {
+        lp += jvp_utf8_decode_length(*lp);
+        n++;
+      }
+
+      a = jv_array_append(a, jv_number(n));
       p++;
     }
   }
@@ -1730,10 +1742,9 @@ static int jvp_object_contains(jv a, jv b) {
   int r = 1;
 
   jv_object_foreach(b, key, b_val) {
-    jv a_val = jv_object_get(jv_copy(a), jv_copy(key));
+    jv a_val = jv_object_get(jv_copy(a), key);
 
     r = jv_contains(a_val, b_val);
-    jv_free(key);
 
     if (!r) break;
   }

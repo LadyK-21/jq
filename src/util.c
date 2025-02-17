@@ -79,27 +79,6 @@ FILE *fopen(const char *fname, const char *mode) {
 }
 #endif
 
-#ifndef HAVE_MKSTEMP
-int mkstemp(char *template) {
-  size_t len = strlen(template);
-  int tries=5;
-  int fd;
-
-  // mktemp() truncates template when it fails
-  char *s = alloca(len + 1);
-  assert(s != NULL);
-  strcpy(s, template);
-
-  do {
-    // Restore template
-    strcpy(template, s);
-    (void) mktemp(template);
-    fd = open(template, O_CREAT | O_EXCL | O_RDWR, 0600);
-  } while (fd == -1 && tries-- > 0);
-  return fd;
-}
-#endif
-
 jv expand_path(jv path) {
   assert(jv_get_kind(path) == JV_KIND_STRING);
   const char *pstr = jv_string_value(path);
@@ -128,12 +107,12 @@ jv get_home() {
 #else
     home = getenv("USERPROFILE");
     if (!home) {
-      char *hd = getenv("HOMEDRIVE");
-      if (!hd) hd = "";
       home = getenv("HOMEPATH");
       if (!home) {
         ret = jv_invalid_with_msg(jv_string("Could not find home directory."));
       } else {
+        const char *hd = getenv("HOMEDRIVE");
+        if (!hd) hd = "";
         ret = jv_string_fmt("%s%s",hd,home);
       }
     } else {
@@ -353,7 +332,7 @@ static int jq_util_input_read_more(jq_util_input_state *state) {
          * terminating '\0'. This only works because we previously memset our
          * buffer with something nonzero.
          */
-        for (p = state->buf, i = sizeof(state->buf) - 1; i > 0; i--) {
+        for (i = sizeof(state->buf) - 1; i > 0; i--) {
           if (state->buf[i] == '\0')
             break;
         }
@@ -472,7 +451,7 @@ jv jq_util_input_next_input(jq_util_input_state *state) {
   return value;
 }
 
-#if defined(WIN32) && !defined(HAVE_STRPTIME)
+#ifndef HAVE_STRPTIME
 /* http://cvsweb.netbsd.org/bsdweb.cgi/~checkout~/src/lib/libc/time/strptime.c?only_with_tag=HEAD
  * NetBSD implementation strptime().
  * Format description: https://netbsd.gw.com/cgi-bin/man-cgi?strptime+3+NetBSD-current
@@ -554,32 +533,32 @@ static const unsigned char *find_string(const unsigned char *, int *, const char
 static char* utc = "UTC";
 #endif
 /* RFC-822/RFC-2822 */
-static const char* const nast[] = {
+static const char *const nast[] = {
        "EST",    "CST",    "MST",    "PST",    "\0\0\0"
 };
-static const char* const nadt[] = {
+static const char *const nadt[] = {
        "EDT",    "CDT",    "MDT",    "PDT",    "\0\0\0"
 };
-static const char* weekday_name[] =
+static const char *const weekday_name[] =
 {
     "Sunday", "Monday", "Tuesday", "Wednesday",
     "Thursday", "Friday", "Saturday"
 };
-static const char* ab_weekday_name[] =
+static const char *const ab_weekday_name[] =
 {
     "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
 };
-static const char* month_name[] =
+static const char *const month_name[] =
 {
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December"
 };
-static const char* ab_month_name[] =
+static const char *const ab_month_name[] =
 {
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
 };
-static const char* am_pm[] = {"AM", "PM"};
+static const char *const am_pm[] = {"AM", "PM"};
 
 
 /*
@@ -729,7 +708,7 @@ recurse:
             continue;
 
         case 'x':	/* The date, using the locale's format. */
-            /* fall throug */
+            /* fall through */
 
         case 'D':	/* The date as "%y/%m/%d". */
         {
@@ -839,40 +818,46 @@ recurse:
             LEGAL_ALT(ALT_O);
             continue;
 
-#ifndef TIME_MAX
-#define TIME_MAX	INT64_MAX
-#endif
-        case 's':	/* seconds since the epoch */
-            {
-                time_t sse = 0;
-                uint64_t rulim = TIME_MAX;
-
-                if (*bp < '0' || *bp > '9') {
-                    bp = NULL;
-                    continue;
-                }
-
-                do {
-                    sse *= 10;
-                    sse += *bp++ - '0';
-                    rulim /= 10;
-                } while ((sse * 10 <= TIME_MAX) &&
-                     rulim && *bp >= '0' && *bp <= '9');
-
-                if (sse < 0 || (uint64_t)sse > TIME_MAX) {
-                    bp = NULL;
-                    continue;
-                }
+        case 's': {     /* seconds since the epoch */
 #ifdef _WIN32
-                if (localtime_s(tm, &sse) == 0)
+            const time_t TIME_MAX = INT32_MAX;
 #else
-                if (localtime_r(&sse, tm))
+            const time_t TIME_MAX = INT64_MAX;
 #endif
-                    state |= S_YDAY | S_WDAY | S_MON | S_MDAY | S_YEAR;
-                else
-                    bp = NULL;
+            time_t sse, d;
+
+            if (*bp < '0' || *bp > '9') {
+                bp = NULL;
+                continue;
             }
+
+            sse = *bp++ - '0';
+            while (*bp >= '0' && *bp <= '9') {
+                d = *bp++ - '0';
+                if (sse > TIME_MAX/10) {
+                    bp = NULL;
+                    break;
+                }
+                sse *= 10;
+                if (sse > TIME_MAX - d) {
+                    bp = NULL;
+                    break;
+                }
+                sse += d;
+            }
+            if (bp == NULL)
+                continue;
+
+#ifdef _WIN32
+            if (localtime_s(tm, &sse))
+#else
+            if (localtime_r(&sse, tm) == NULL)
+#endif
+                bp = NULL;
+            else
+                state |= S_YDAY | S_WDAY | S_MON | S_MDAY | S_YEAR;
             continue;
+            }
 
         case 'U':	/* The week of year, beginning on sunday. */
         case 'W':	/* The week of year, beginning on monday. */

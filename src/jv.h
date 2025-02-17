@@ -5,6 +5,10 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #if (defined(__GNUC__) && __GNUC__ >= 7) || \
     (defined(__clang__) && __clang_major__ >= 10)
 # define JQ_FALLTHROUGH __attribute__((fallthrough))
@@ -70,8 +74,9 @@ jv jv_number(double);
 jv jv_number_with_literal(const char*);
 double jv_number_value(jv);
 int jv_is_integer(jv);
+jv jv_number_negate(jv);
 
-int jv_number_has_literal(jv n);
+int jv_number_has_literal(jv);
 const char* jv_number_get_literal(jv);
 
 jv jv_array(void);
@@ -109,6 +114,9 @@ jv jv_array_indexes(jv, jv);
   __attribute__ ((__format__( __printf__, fmt_arg_num, args_num)))
 #define JV_VPRINTF_LIKE(fmt_arg_num) \
   __attribute__ ((__format__( __printf__, fmt_arg_num, 0)))
+#else
+#define JV_PRINTF_LIKE(fmt_arg_num, args_num)
+#define JV_VPRINTF_LIKE(fmt_arg_num)
 #endif
 
 
@@ -219,7 +227,7 @@ enum jv_print_flags {
   JV_PRINT_SPACE2   = 1024,
 };
 #define JV_PRINT_INDENT_FLAGS(n) \
-    ((n) < 0 || (n) > 7 ? JV_PRINT_TAB | JV_PRINT_PRETTY : (n) == 0 ? 0 : (n) << 8 | JV_PRINT_PRETTY)
+    ((n) < 0 || (n) > 7 ? JV_PRINT_TAB | JV_PRINT_PRETTY : (n) << 8 | JV_PRINT_PRETTY)
 void jv_dumpf(jv, FILE *f, int flags);
 void jv_dump(jv, int flags);
 void jv_show(jv, int flags);
@@ -234,6 +242,7 @@ enum {
 
 jv jv_parse(const char* string);
 jv jv_parse_sized(const char* string, int length);
+jv jv_parse_custom_flags(const char* string, int flags);
 
 typedef void (*jv_nomem_handler_f)(void *);
 void jv_nomem_handler(jv_nomem_handler_f, void *);
@@ -259,6 +268,9 @@ int jv_cmp(jv, jv);
 jv jv_group(jv, jv);
 jv jv_sort(jv, jv);
 
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 

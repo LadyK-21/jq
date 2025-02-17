@@ -61,7 +61,7 @@ null
 null
 "interpolation"
 
-@text,@json,([1,.]|@csv,@tsv),@html,@uri,@sh,(@base64|.,@base64d)
+@text,@json,([1,.]|@csv,@tsv),@html,(@uri|.,@urid),@sh,(@base64|.,@base64d)
 "!()<>&'\"\t"
 "!()<>&'\"\t"
 "\"!()<>&'\\\"\\t\""
@@ -69,6 +69,7 @@ null
 "1\t!()<>&'\"\\t"
 "!()&lt;&gt;&amp;&apos;&quot;\t"
 "%21%28%29%3C%3E%26%27%22%09"
+"!()<>&'\"\t"
 "'!()<>&'\\''\"\t'"
 "ISgpPD4mJyIJ"
 "!()<>&'\"\t"
@@ -85,6 +86,10 @@ null
 @uri
 "\u03bc"
 "%CE%BC"
+
+@urid
+"%CE%BC"
+"\u03bc"
 
 @html "<b>\(.)</b>"
 "<script>hax</script>"
@@ -177,6 +182,11 @@ jq: error: Cannot use number (0) as object key at <top-level>, line 1:
 map(try .a[] catch ., try .a.[] catch ., .a[]?, .a.[]?)
 [{"a": [1,2]}, {"a": 123}]
 [1,2,1,2,1,2,1,2,"Cannot iterate over number (123)","Cannot iterate over number (123)"]
+
+# oss-fuzz #66070: objects[] leaks if a non-last element throws an error
+try ["OK", (.[] | error)] catch ["KO", .]
+{"a":["b"],"c":["d"]}
+["KO",["b"]]
 
 #
 # Negative array indices
@@ -312,6 +322,10 @@ null
 [{"a":1}, {"b":2}, {"a":3, "b":4}]
 [-1, -1, -4]
 
+[foreach range(5) as $x (0; .+$x | select($x!=2); [$x,.])]
+null
+[[0,0],[1,1],[3,4],[4,8]]
+
 [limit(3; .[])]
 [11,22,33,44,55,66,77,88,99]
 [11,22,33]
@@ -324,9 +338,37 @@ null
 "badness"
 [1]
 
+try limit(-1; error) catch .
+null
+"limit doesn't support negative count"
+
+[skip(3; .[])]
+[1,2,3,4,5,6,7,8,9]
+[4,5,6,7,8,9]
+
+[skip(0,2,3,4; .[])]
+[1,2,3]
+[1,2,3,3]
+
+[skip(3; .[])]
+[]
+[]
+
+try skip(-1; error) catch .
+null
+"skip doesn't support negative count"
+
+nth(1; 0,1,error("foo"))
+null
+1
+
 [first(range(.)), last(range(.))]
 10
 [0,9]
+
+[first(range(.)), last(range(.))]
+0
+[]
 
 [nth(0,5,9,10,15; range(.)), try nth(-1; range(.)) catch .]
 10
@@ -637,6 +679,19 @@ map_values(.+1)
 [0,1,2]
 [1,2,3]
 
+[add(null), add(range(range(10))), add(empty), add(10,range(10))]
+null
+[null,120,null,55]
+
+# Real-world use case for add(empty)
+.sum = add(.arr[])
+{"arr":[]}
+{"arr":[],"sum":null}
+
+add({(.[]):1}) | keys
+["a","a","b","a","d","b","d","a","d"]
+["a","b","d"]
+
 #
 # User-defined functions
 # Oh god.
@@ -773,6 +828,10 @@ null
 reduce . as $n (.; .)
 null
 null
+
+reduce range(5) as $x (0; .+$x | select($x!=2))
+null
+8
 
 # Destructuring
 . as {$a, b: [$c, {$d}]} | [$a, $c, $d]
@@ -1329,6 +1388,26 @@ split("")
 "xababababax"
 [1,7,[1,3,5,7]]
 
+# trim
+# \u000b is vertical tab (\v not supported by json)
+map(trim), map(ltrim), map(rtrim)
+[" \n\t\r\f\u000b", "","  ", "a", " a ", "abc", "  abc  ", "  abc", "abc  "]
+["", "", "", "a", "a", "abc", "abc", "abc", "abc"]
+["", "", "", "a", "a ", "abc", "abc  ", "abc", "abc  "]
+["", "", "", "a", " a", "abc", "  abc", "  abc", "abc"]
+
+trim, ltrim, rtrim
+"\u0009\u000A\u000B\u000C\u000D\u0020\u0085\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000abc\u0009\u000A\u000B\u000C\u000D\u0020\u0085\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000"
+"abc"
+"abc\u0009\u000A\u000B\u000C\u000D\u0020\u0085\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000"
+"\u0009\u000A\u000B\u000C\u000D\u0020\u0085\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000abc"
+
+try trim catch ., try ltrim catch ., try rtrim catch .
+123
+"trim input must be a string"
+"trim input must be a string"
+"trim input must be a string"
+
 indices(1)
 [0,1,1,2,3,4,1,5]
 [1,2,6]
@@ -1344,6 +1423,22 @@ indices([1,2])
 indices(", ")
 "a,b, cd,e, fgh, ijkl"
 [3,9,14]
+
+index("!")
+"здравствуй мир!"
+14
+
+.[:rindex("x")]
+"正xyz"
+"正"
+
+indices("o")
+"🇬🇧oo"
+[2,3]
+
+indices("o")
+"ƒoo"
+[1,2]
 
 [.[]|split(",")]
 ["a, bc, def, ghij, jklmn, a,b, c,d, e,f", "a,b,c,d, e,f,g,h"]
@@ -1547,11 +1642,21 @@ ascii_upcase
 "useful but not for é"
 "USEFUL BUT NOT FOR é"
 
-bsearch(0,2,4)
+bsearch(0,1,2,3,4)
 [1,2,3]
 -1
+0
 1
+2
 -4
+
+bsearch({x:1})
+[{ "x": 0 },{ "x": 1 },{ "x": 2 }]
+1
+
+try ["OK", bsearch(0)] catch ["KO",.]
+"aa"
+["KO","string (\"aa\") cannot be searched from"]
 
 # strptime tests are in optional.test
 
@@ -1562,6 +1667,14 @@ strftime("%Y-%m-%dT%H:%M:%SZ")
 strftime("%A, %B %d, %Y")
 1435677542.822351
 "Tuesday, June 30, 2015"
+
+strftime("%Y-%m-%dT%H:%M:%SZ")
+[2024,2,15]
+"2024-03-15T00:00:00Z"
+
+mktime
+[2024,8,21]
+1726876800
 
 gmtime
 1425599507
@@ -1579,6 +1692,15 @@ try strflocaltime("%Y-%m-%dT%H:%M:%SZ") catch .
 try mktime catch .
 ["a",1,2,3,4,5,6,7]
 "mktime requires parsed datetime inputs"
+
+# oss-fuzz #67403: non-string argument with number input fails assert
+try ["OK", strftime([])] catch ["KO", .]
+0
+["KO","strftime/1 requires a string format"]
+
+try ["OK", strflocaltime({})] catch ["KO", .]
+0
+["KO","strflocaltime/1 requires a string format"]
 
 # module system
 import "a" as foo; import "b" as bar; def fooa: foo::a; [fooa, bar::a, bar::b, foo::a]
@@ -1665,6 +1787,19 @@ true
 try -. catch .
 "very-long-string"
 "string (\"very-long-...) cannot be negated"
+
+try (.-.) catch .
+"very-long-string"
+"string (\"very-long-...) and string (\"very-long-...) cannot be subtracted"
+
+"x" * range(0; 12; 2) + "☆" * 5 | try -. catch .
+null
+"string (\"☆☆☆...) cannot be negated"
+"string (\"xx☆☆...) cannot be negated"
+"string (\"xxxx☆☆...) cannot be negated"
+"string (\"xxxxxx☆...) cannot be negated"
+"string (\"xxxxxxxx...) cannot be negated"
+"string (\"xxxxxxxxxx...) cannot be negated"
 
 join(",")
 ["1",2,true,false,3.4]
@@ -1836,17 +1971,17 @@ map(. == 1)
 
 # When no arithmetic is involved jq should preserve the literal value
 
-.[0] | tostring
+.[0] | tostring | . == if have_decnum then "13911860366432393" else "13911860366432392" end
 [13911860366432393]
-"13911860366432393"
+true
 
-.x | tojson
+.x | tojson | . == if have_decnum then "13911860366432393" else "13911860366432392" end
 {"x":13911860366432393}
-"13911860366432393"
+true
 
-13911860366432393 == 13911860366432392
+(13911860366432393 == 13911860366432392) | . == if have_decnum then false else true end
 null
-false
+true
 
 
 # Applying arithmetic to the value will truncate the result to double
@@ -1863,9 +1998,31 @@ false
 {"x":13911860366432393}
 13911860366432382
 
+# Unary negation preserves numerical precision
+-. | tojson == if have_decnum then "-13911860366432393" else "-13911860366432392" end
+13911860366432393
+true
+
+-. | tojson == if have_decnum then "0.12345678901234567890123456789" else "0.12345678901234568" end
+-0.12345678901234567890123456789
+true
+
+[1E+1000,-1E+1000 | tojson] == if have_decnum then ["1E+1000","-1E+1000"] else ["1.7976931348623157e+308","-1.7976931348623157e+308"] end
+null
+true
+
 . |= try . catch .
 1
 1
+
+# decnum to double conversion
+.[] as $n | $n+0 | [., tostring, . == $n]
+[-9007199254740993, -9007199254740992, 9007199254740992, 9007199254740993, 13911860366432393]
+[-9007199254740992,"-9007199254740992",true]
+[-9007199254740992,"-9007199254740992",true]
+[9007199254740992,"9007199254740992",true]
+[9007199254740992,"9007199254740992",true]
+[13911860366432392,"13911860366432392",true]
 
 # abs, fabs, length
 abs
@@ -1929,6 +2086,11 @@ tojson | fromjson
 {"a":nan}
 {"a":null}
 
+# also "nan with payload" #2985
+if have_decnum then fromjson else nan end | isnan
+"nan1234"
+true
+
 
 # calling input/0, or debug/0 in a test doesn't crash jq
 
@@ -1986,8 +2148,8 @@ null
 2
 
 .[] |= try tonumber
-["1", "2a", "3", 4]
-[1, 3, 4]
+["1", "2a", "3", " 4 ", "5.67", ".89", "-876", "+5.43", 21]
+[1, 3, 5.67, 0.89, -876, 5.43, 21]
 
 # Also 1859, but from 2073
 any(keys[]|tostring?;true)
@@ -2082,3 +2244,48 @@ try ("foobar" | .[1.5]) catch .
 null
 "Cannot index string with number"
 
+
+# setpath/2 does not leak the input after an invalid get #2970
+
+try ["ok", setpath([1]; 1)] catch ["ko", .]
+{"hi":"hello"}
+["ko","Cannot index object with number"]
+
+try fromjson catch .
+"{'a': 123}"
+"Invalid string literal; expected \", but got ' at line 1, column 5 (while parsing '{'a': 123}')"
+
+# ltrimstr/1 rtrimstr/1 don't leak on invalid input #2977
+
+try ltrimstr(1) catch "x", try rtrimstr(1) catch "x" | "ok"
+"hi"
+"ok"
+"ok"
+
+try ltrimstr("x") catch "x", try rtrimstr("x") catch "x" | "ok"
+{"hey":[]}
+"ok"
+"ok"
+
+# ltrimstr/1 and rtrimstr/1 return an error for non-strings. #2969
+
+.[] as [$x, $y] | try ["ok", ($x | ltrimstr($y))] catch ["ko", .]
+[["hi",1],[1,"hi"],["hi","hi"],[1,1]]
+["ko","startswith() requires string inputs"]
+["ko","startswith() requires string inputs"]
+["ok",""]
+["ko","startswith() requires string inputs"]
+
+.[] as [$x, $y] | try ["ok", ($x | rtrimstr($y))] catch ["ko", .]
+[["hi",1],[1,"hi"],["hi","hi"],[1,1]]
+["ko","endswith() requires string inputs"]
+["ko","endswith() requires string inputs"]
+["ok",""]
+["ko","endswith() requires string inputs"]
+
+
+# oss-fuzz #66061: setpath/2 leaks when indexing array with array
+
+try ["OK", setpath([[1]]; 1)] catch ["KO", .]
+[]
+["KO","Cannot update field at array index of array"]

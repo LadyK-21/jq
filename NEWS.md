@@ -1,3 +1,51 @@
+# 1.7.1
+
+## Security
+
+- CVE-2023-50246: Fix heap buffer overflow in jvp\_literal\_number\_literal
+- CVE-2023-50268: fix stack-buffer-overflow if comparing nan with payload
+
+## CLI changes
+
+- Make the default background color more suitable for bright backgrounds. @mjarosie @taoky @nicowilliams @itchyny #2904
+- Allow passing the inline jq script after `--`. @emanuele6 #2919
+- Restrict systems operations on OpenBSD and remove unused `mkstemp`. @klemensn #2934
+- Fix possible uninitialised value dereference if `jq_init()` fails. @emanuele6 @nicowilliams #2935
+
+## Language changes
+
+- Simplify `paths/0` and `paths/1`. @asheiduk @emanuele6 #2946
+- Reject `U+001F` in string literals. @torsten-schenk @itchyny @wader #2911
+- Remove unused nref accumulator in `block_bind_library`. @emanuele6 #2914
+- Remove a bunch of unused variables, and useless assignments. @emanuele6 #2914
+- main.c: Remove unused EXIT\_STATUS\_EXACT option. @emanuele6 #2915
+- Actually use the number correctly casted from double to int as index. @emanuele6 #2916
+- src/builtin.c: remove unnecessary jv\_copy-s in type\_error/type\_error2. @emanuele6 #2937
+- Remove undefined behavior caught by LLVM 10 UBSAN. @Gaelan @emanuele6 #2926
+- Convert decnum to binary64 (double) instead of decimal64. This makes jq behave like the JSON specification suggests and more similar to other languages. @wader @leonid-s-usov #2949
+- Fix memory leaks on invalid input for `ltrimstr/1` and `rtrimstr/1`. @emanuele6 #2977
+- Fix memory leak on failed get for `setpath/2`. @emanuele6 #2970
+- Fix nan from json parsing also for nans with payload that start with 'n'. @emanuele6 #2985
+- Allow carriage return characters in comments. @emanuele6 #2942 #2984
+
+## Documentation changes
+
+- Generate links in the man page. @emanuele6 #2931
+- Standardize arch types to AMD64 & ARM64 from index page download dropdown. @owenthereal #2884
+
+## libjq
+
+- Add extern C for C++. @rockwotj #2953
+
+## Build and test changes
+
+- Fix incorrect syntax for checksum file. @kamontat @wader #2899
+- Remove `-dirty` version suffix for windows release build. @itchyny #2888
+- Make use of `od` in tests more compatible. @nabijaczleweli @emanuele6 @nicowilliams #2922
+- Add dependabot. @yeikel #2889
+- Extend fuzzing setup to fuzz parser and JSON serializer. @DavidKorczynski @emanuele6 #2952
+- Keep releasing executables with legacy names. @itchyny #2951
+
 # 1.7
 
 After a five year hiatus we're back with a GitHub organization, with new admins and new maintainers who have brought a great deal of energy to make a long-awaited and long-needed new release.  We're very grateful for all the new owners, admins, and maintainers.  Special thanks go to Owen Ou (@owenthereal) for pushing to set up a new GitHub organization for jq, Stephen Dolan (@stedolan) for transferring the jq repository to the new organization, @itchyny for doing a great deal of work to get the release done, Mattias Wadman (@wader) and Emanuele Torre (@emanuele6) for many PRs and code reviews.  Many others also contributed PRs, issues, and code reviews as well, and you can find their contributions in the Git log and on the [closed issues and PRs page](https://github.com/jqlang/jq/issues?q=is%3Aclosed+sort%3Aupdated-desc).
@@ -214,7 +262,7 @@ Full commit log can be found at <https://github.com/jqlang/jq/compare/jq-1.6...j
 - Fix `contains/1` to handle strings with NUL. @nicowilliams 61cd6db
 - Fix `stderr/0` to output raw text without any decoration. @itchyny #2751
 - Fix `nth/2` to emit empty on index out of range. @itchyny #2674
-- Fix `implode` to not assert and instead replace invalid unicode codepoints. @wader #2646
+- Fix `implode` to not assert and instead replace invalid Unicode codepoints. @wader #2646
 - Fix `indices/1` and `rindex/1` in case of overlapping matches in strings. @emanuele6 #2718
 - Fix `sub/3` to resolve issues involving global search-and-replace (gsub) operations. @pkoppstein #2641
 - Fix `significand/0`, `gamma/0` and `drem/2` to be available on macOS. @itchyny #2756 #2775
