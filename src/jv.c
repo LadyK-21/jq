@@ -570,7 +570,10 @@ static jvp_literal_number* jvp_literal_number_alloc(unsigned literal_length) {
 }
 
 static jv jvp_literal_number_new(const char * literal) {
-  jvp_literal_number* n = jvp_literal_number_alloc(strlen(literal));
+  size_t len = strlen(literal);
+  if (len > DEC_MAX_DIGITS)
+    return JV_INVALID;
+  jvp_literal_number* n = jvp_literal_number_alloc(len);
 
   decContext *ctx = DEC_CONTEXT();
   decContextClearStatus(ctx, DEC_Conversion_syntax);
